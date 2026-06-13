@@ -1,21 +1,37 @@
 name: Release
 
 on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   release:
     name: Build release artifacts
     runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -25,16 +41,54 @@ jobs:
       - name: Test
         run: go test -count=1 ./...
 
+      - name: Pick release version
+        id: version
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --tags --force
+
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            version="${GITHUB_REF_NAME}"
+            create_tag=false
+          else
+            version="$(git tag --points-at HEAD --list 'v[0-9]*' --sort=-v:refname | head -n 1)"
+            if [[ -n "$version" ]]; then
+              create_tag=false
+            else
+              latest="$(git tag --list 'v[0-9]*' --sort=-v:refname | head -n 1)"
+              if [[ -z "$latest" ]]; then
+                version="v0.1.0"
+              elif [[ "$latest" =~ ^v([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+                version="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.$((BASH_REMATCH[3] + 1))"
+              else
+                echo "Latest tag '$latest' is not a plain vMAJOR.MINOR.PATCH version." >&2
+                exit 1
+              fi
+              create_tag=true
+            fi
+          fi
+
+          if [[ "$create_tag" == "true" ]]; then
+            git tag "$version"
+            git push origin "$version"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - name: Build CLI archives
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p dist
+          version="${{ steps.version.outputs.version }}"
 
           build_unix() {
             local goos="$1"
             local goarch="$2"
-            local name="gbyte-${GITHUB_REF_NAME}-${goos}-${goarch}"
+            local name="gbyte-${version}-${goos}-${goarch}"
             GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="-s -w" -o "dist/${name}/gbyte" .
             cp LICENSE "dist/${name}/"
             tar -C dist -czf "dist/${name}.tar.gz" "$name"
@@ -43,7 +97,7 @@ jobs:
 
           build_windows() {
             local goarch="$1"
-            local name="gbyte-${GITHUB_REF_NAME}-windows-${goarch}"
+            local name="gbyte-${version}-windows-${goarch}"
             GOOS=windows GOARCH="$goarch" go build -trimpath -ldflags="-s -w" -o "dist/${name}/gbyte.exe" .
             cp LICENSE "dist/${name}/"
             (cd dist && zip -qr "${name}.zip" "$name")
@@ -60,12 +114,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
           mkdir -p dist/gbyte-web
           GOOS=js GOARCH=wasm go build -trimpath -o dist/gbyte-web/gbyte.wasm .
           cp "$(go env GOROOT)/lib/wasm/wasm_exec.js" dist/gbyte-web/
           cp examples/web/index.html dist/gbyte-web/
           cp LICENSE dist/gbyte-web/
-          (cd dist && zip -qr "gbyte-${GITHUB_REF_NAME}-web-wasm.zip" gbyte-web)
+          (cd dist && zip -qr "gbyte-${version}-web-wasm.zip" gbyte-web)
           rm -rf dist/gbyte-web
 
       - name: Publish GitHub release
@@ -73,4 +128,9 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         shell: bash
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
+          version="${{ steps.version.outputs.version }}"
+          if gh release view "$version" >/dev/null 2>&1; then
+            gh release upload "$version" dist/* --clobber
+          else
+            gh release create "$version" dist/* --generate-notes
+          fi
