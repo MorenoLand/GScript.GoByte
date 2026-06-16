@@ -588,6 +588,7 @@ func decompileRangeWithState(code []instruction, start, end, indent int, state *
 			if target.text == "unknown_object" {
 				stack = append(stack, expr{text: "new " + unquoteText(className.text) + "()", kind: "object"})
 			} else {
+				className.kind = "class"
 				stack = append(stack, target, className)
 			}
 		case opWith:
@@ -757,8 +758,8 @@ func decompileRangeWithState(code []instruction, start, end, indent int, state *
 				continue
 			}
 			rhs = normalizeAssignmentValue(lhs, rhs)
-			if isObjectNameExpr(lhs) && rhs.kind == "string" && strings.HasPrefix(unquoteText(rhs.text), "Gui") {
-				lines = append(lines, pad(indent)+"new "+unquoteText(rhs.text)+"("+lhs.text+");")
+			if isConstructorTarget(lhs, rhs) {
+				lines = append(lines, pad(indent)+"new "+unquoteText(rhs.text)+"("+constructorArg(lhs)+");")
 			} else {
 				lines = append(lines, pad(indent)+lhs.text+" = "+rhs.text+";")
 			}
@@ -1473,6 +1474,17 @@ func isConstructorLine(line string) bool {
 
 func isObjectNameExpr(value expr) bool {
 	return value.kind == "string" || strings.Contains(value.text, " @ ")
+}
+
+func isConstructorTarget(lhs, rhs expr) bool {
+	return rhs.kind == "class" && strings.HasPrefix(unquoteText(rhs.text), "Gui") && lhs.text != "" && lhs.text != "/* missing */"
+}
+
+func constructorArg(value expr) string {
+	if isObjectNameExpr(value) {
+		return value.text
+	}
+	return quote(value.text)
 }
 
 func pad(level int) string {

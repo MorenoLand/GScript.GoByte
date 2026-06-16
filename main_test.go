@@ -110,3 +110,23 @@ func TestDispatchSelectorUsesRecoveredRegisters(t *testing.T) {
 		t.Fatalf("dispatch selector = %q, %d, %v; want obj.title, 4, true", selector, pos, ok)
 	}
 }
+
+func TestAssignmentStyleGuiConstructorOpensWithBlock(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "FileBrowser_Screen"}},
+		{addr: 1, op: opPushString, operand: &operand{str: "GuiWindowCtrl", kind: "string"}},
+		{addr: 2, op: opNewObject},
+		{addr: 3, op: opAssign},
+		{addr: 4, op: opConvertToObject},
+		{addr: 5, op: opWith, operand: &operand{number: 9, kind: "number"}},
+		{addr: 6, op: opPushVariable, operand: &operand{str: "text"}},
+		{addr: 7, op: opPushString, operand: &operand{str: "File Browser", kind: "string"}},
+		{addr: 8, op: opAssign},
+	}, 0, 9, 0)
+
+	got := strings.Join(lines, "\n")
+	want := "new GuiWindowCtrl(\"FileBrowser_Screen\") {\n    text = \"File Browser\";\n}"
+	if got != want {
+		t.Fatalf("constructor block:\n%s\nwant:\n%s", got, want)
+	}
+}
