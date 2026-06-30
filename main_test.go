@@ -479,6 +479,39 @@ func TestRecoverTailDispatchAtSelector(t *testing.T) {
 	}
 }
 
+func TestRecoverBackwardDispatchSkipsLeadingDefaultCase(t *testing.T) {
+	code := []instruction{
+		{addr: 0, op: opJmp, operand: &operand{number: 9, kind: "number"}},
+		{addr: 1, op: opPushVariable, operand: &operand{str: "result"}},
+		{addr: 2, op: opPushString, operand: &operand{str: "a", kind: "string"}},
+		{addr: 3, op: opAssign},
+		{addr: 4, op: opJmp, operand: &operand{number: 22, kind: "number"}},
+		{addr: 5, op: opPushVariable, operand: &operand{str: "result"}},
+		{addr: 6, op: opPushString, operand: &operand{str: "b", kind: "string"}},
+		{addr: 7, op: opAssign},
+		{addr: 8, op: opJmp, operand: &operand{number: 22, kind: "number"}},
+		{addr: 9, op: opPushVariable, operand: &operand{str: "mode"}},
+		{addr: 10, op: opCopy},
+		{addr: 11, op: opPushString, operand: &operand{str: "none", kind: "string"}},
+		{addr: 12, op: opEqual},
+		{addr: 13, op: opJeq, operand: &operand{number: 22, kind: "number"}},
+		{addr: 14, op: opCopy},
+		{addr: 15, op: opPushString, operand: &operand{str: "a", kind: "string"}},
+		{addr: 16, op: opEqual},
+		{addr: 17, op: opJeq, operand: &operand{number: 1, kind: "number"}},
+		{addr: 18, op: opCopy},
+		{addr: 19, op: opPushString, operand: &operand{str: "b", kind: "string"}},
+		{addr: 20, op: opEqual},
+		{addr: 21, op: opJeq, operand: &operand{number: 5, kind: "number"}},
+		{addr: 22, op: opPop},
+	}
+	lines := decompileRange(code, 0, len(code), 0)
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "goto label_") || strings.Contains(got, `"none"`) || !strings.Contains(got, `if (mode == "a")`) || !strings.Contains(got, `else if (mode == "b")`) {
+		t.Fatalf("leading default dispatch not recovered:\n%s", got)
+	}
+}
+
 func TestJmpToRangeEndStopsBodyLeak(t *testing.T) {
 	code := []instruction{
 		{addr: 0, op: opJmp, operand: &operand{number: 4, kind: "number"}},

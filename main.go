@@ -1361,6 +1361,10 @@ func parseBackwardDispatchCases(code []instruction, pc, target, end int, state *
 			break
 		}
 		caseTarget := jumpTarget(jump)
+		if len(cases) == 0 && caseTarget > target {
+			pos += 4
+			continue
+		}
 		if caseTarget <= pc || caseTarget >= target {
 			break
 		}
