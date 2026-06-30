@@ -836,11 +836,17 @@ func decompileRangeWithStateAndStack(code []instruction, start, end, indent int,
 				if ins.op == opJeq {
 					loopCondition = "!(" + condition + ")"
 				}
-				body := decompileRangeWithStateAndStack(code, pc+1, end, indent+1, state, stack)
-				if forLoop, ok := recoverForLoop(lines, body, loopCondition, pc, indent); ok {
-					lines = forLoop
-					pc = end - 1
-				} else {
+				loopEnd := loopRecoveryEnd(code, pc+1, end, pc)
+				recovered := false
+				if loopEnd > pc+1 {
+					body := decompileRangeWithStateAndStack(code, pc+1, loopEnd, indent+1, state, stack)
+					if forLoop, ok := recoverForLoop(lines, body, loopCondition, pc, indent); ok {
+						lines = forLoop
+						pc = loopEnd - 1
+						recovered = true
+					}
+				}
+				if !recovered {
 					lines = append(lines, pad(indent)+fmt.Sprintf("if (%s) goto label_%d;", condition, target))
 				}
 			}
@@ -982,6 +988,18 @@ func parseLoopIncrement(line string) (string, string, bool) {
 		}
 	}
 	return "", "", false
+}
+
+func loopRecoveryEnd(code []instruction, start, end, branchPC int) int {
+	for i := start; i < end; i++ {
+		if code[i].op == opJmp && jumpTarget(code[i]) <= branchPC {
+			return i + 1
+		}
+		if code[i].op == opRet {
+			return 0
+		}
+	}
+	return 0
 }
 
 type dispatchCase struct {
