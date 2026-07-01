@@ -1191,3 +1191,16 @@ func TestRecoverNestedTernaryAssignmentBranch(t *testing.T) {
 		t.Fatalf("nested ternary assignment:\n%s", got)
 	}
 }
+
+func TestRecoverNonGuiConstructorTarget(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushString, operand: &operand{str: "SinglePlayerTable"}},
+		{addr: 1, op: opPushString, operand: &operand{str: "TStaticVar"}},
+		{addr: 2, op: opNewObject},
+		{addr: 3, op: opAssign},
+	}, 0, 4, 0)
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, `new TStaticVar("SinglePlayerTable");`) || strings.Contains(got, `"SinglePlayerTable" = "TStaticVar";`) {
+		t.Fatalf("non-gui constructor:\n%s", got)
+	}
+}

@@ -2953,7 +2953,7 @@ func isObjectNameExpr(value expr) bool {
 }
 
 func isConstructorTarget(lhs, rhs expr) bool {
-	return rhs.kind == "class" && strings.HasPrefix(unquoteText(rhs.text), "Gui") && lhs.text != "" && lhs.text != "/* missing */"
+	return rhs.kind == "class" && lhs.text != "" && lhs.text != "/* missing */"
 }
 
 func constructorArg(value expr) string {
