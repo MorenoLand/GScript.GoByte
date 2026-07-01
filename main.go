@@ -853,6 +853,17 @@ func decompileRangeWithStateAndStack(code []instruction, start, end, indent int,
 				pc = newPC
 				continue
 			}
+			if assignLines, newPC, ok := recoverSelfTernaryAssignment(code, pc, target, end, indent, state, condition, ins.op, stack); ok {
+				lines = append(lines, assignLines...)
+				stack = stack[:len(stack)-1]
+				pc = newPC
+				continue
+			}
+			if value, newPC, ok := recoverTernaryExpression(code, pc, target, end, state, condition, ins.op); ok {
+				stack = append(stack, expr{text: value})
+				pc = newPC
+				continue
+			}
 			if assignLines, newPC, ok := recoverConditionalAssignmentChain(code, pc, target, end, indent, state, condition, ins.op, stack); ok {
 				lines = append(lines, assignLines...)
 				stack = stack[:len(stack)-1]
@@ -1530,6 +1541,52 @@ func recoverTernaryAssignment(code []instruction, pc, target, end, indent int, s
 	return lines, common, true
 }
 
+func recoverSelfTernaryAssignment(code []instruction, pc, target, end, indent int, state *decompileState, condition string, branchOp opcode, stack []expr) ([]string, int, bool) {
+	if len(stack) == 0 || target <= pc+1 || target >= end || code[target].op != opAssign {
+		return nil, 0, false
+	}
+	falseValue, ok := evalExprRange(code, pc+1, target, state)
+	if !ok {
+		return nil, 0, false
+	}
+	trueValue := condition
+	if branchOp == opJeq {
+		trueValue, falseValue = falseValue, trueValue
+	}
+	lhs := stack[len(stack)-1].text
+	lines := []string{
+		pad(indent) + "if (" + condition + ") {",
+		pad(indent+1) + lhs + " = " + trueValue + ";",
+		pad(indent) + "}",
+		pad(indent) + "else {",
+		pad(indent+1) + lhs + " = " + falseValue + ";",
+		pad(indent) + "}",
+	}
+	return lines, target, true
+}
+
+func recoverTernaryExpression(code []instruction, pc, target, end int, state *decompileState, condition string, branchOp opcode) (string, int, bool) {
+	if target <= pc+1 || target >= end || code[target-1].op != opJmp {
+		return "", 0, false
+	}
+	common := jumpTarget(code[target-1])
+	if common <= target || common > end {
+		return "", 0, false
+	}
+	trueValue, ok := evalExprRange(code, pc+1, target-1, state)
+	if !ok {
+		return "", 0, false
+	}
+	falseValue, ok := evalExprRange(code, target, common, state)
+	if !ok {
+		return "", 0, false
+	}
+	if branchOp == opJeq {
+		trueValue, falseValue = falseValue, trueValue
+	}
+	return "(" + condition + " ? " + trueValue + " : " + falseValue + ")", common - 1, true
+}
+
 func recoverConditionalAssignmentChain(code []instruction, pc, target, end, indent int, state *decompileState, firstCondition string, firstOp opcode, stack []expr) ([]string, int, bool) {
 	if firstOp != opJne || len(stack) == 0 || target != pc+3 || pc+2 >= end || code[pc+2].op != opJmp {
 		return nil, 0, false
@@ -1596,6 +1653,8 @@ func evalExprRange(code []instruction, start, end int, state *decompileState) (s
 	for pc := start; pc < end; pc++ {
 		ins := code[pc]
 		switch ins.op {
+		case opPushArray:
+			stack = append(stack, expr{marker: true})
 		case opPushString:
 			stack = append(stack, expr{text: quote(ins.operand.str), kind: "string"})
 		case opPushVariable:
@@ -1634,6 +1693,9 @@ func evalExprRange(code []instruction, start, end int, state *decompileState) (s
 			}
 			stack = append(stack, expr{text: fmt.Sprintf("reg%d", id)})
 		case opConvertToFloat, opConvertToString, opConvertToObject, opConvertToVar, opEndParams:
+		case opEndArray:
+			args := collectArgs(&stack)
+			stack = append(stack, expr{text: "{" + strings.Join(args, ", ") + "}"})
 		case opAccessMember:
 			rhs, lhs := popExpr(&stack), popExpr(&stack)
 			stack = append(stack, expr{text: memberBase(lhs.text) + "." + memberName(rhs.text)})

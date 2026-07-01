@@ -1127,3 +1127,43 @@ func TestRecoverTernaryAssignmentBranch(t *testing.T) {
 		t.Fatalf("ternary assignment:\n%s", got)
 	}
 }
+
+func TestRecoverTernaryExpressionBranch(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "out"}},
+		{addr: 1, op: opPushVariable, operand: &operand{str: "field"}},
+		{addr: 2, op: opPushNumber, operand: &operand{number: 0, kind: "number"}},
+		{addr: 3, op: opArrayAccess},
+		{addr: 4, op: opJne, operand: &operand{number: 9, kind: "number"}},
+		{addr: 5, op: opPushVariable, operand: &operand{str: "bitmap"}},
+		{addr: 6, op: opPushString, operand: &operand{str: "Body"}},
+		{addr: 7, op: opAccessMember},
+		{addr: 8, op: opJmp, operand: &operand{number: 10, kind: "number"}},
+		{addr: 9, op: opPushNumber, operand: &operand{number: 0, kind: "number"}},
+		{addr: 10, op: opPushVariable, operand: &operand{str: "extra"}},
+		{addr: 11, op: opBitwiseOr},
+		{addr: 12, op: opAssign},
+	}, 0, 13, 0)
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "{\n}") || !strings.Contains(got, "out = (field[0] ? bitmap.Body : 0) | extra;") {
+		t.Fatalf("ternary expression:\n%s", got)
+	}
+}
+
+func TestRecoverSelfTernaryAssignmentBranch(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "state"}},
+		{addr: 1, op: opPushString, operand: &operand{str: "facetransform"}},
+		{addr: 2, op: opAccessMember},
+		{addr: 3, op: opPushVariable, operand: &operand{str: "field"}},
+		{addr: 4, op: opPushNumber, operand: &operand{number: 41, kind: "number"}},
+		{addr: 5, op: opArrayAccess},
+		{addr: 6, op: opJne, operand: &operand{number: 8, kind: "number"}},
+		{addr: 7, op: opPushNumber, operand: &operand{number: 0, kind: "number"}},
+		{addr: 8, op: opAssign},
+	}, 0, 9, 0)
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "{\n}") || !strings.Contains(got, "state.facetransform = field[41];") || !strings.Contains(got, "state.facetransform = 0;") {
+		t.Fatalf("self ternary assignment:\n%s", got)
+	}
+}
