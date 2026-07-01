@@ -461,6 +461,38 @@ func TestRecoverForwardDispatchMultipleCases(t *testing.T) {
 	}
 }
 
+func TestRecoverForwardDispatchComputedSelector(t *testing.T) {
+	code := []instruction{
+		{addr: 0, op: opJmp, operand: &operand{number: 5, kind: "number"}},
+		{addr: 1, op: opPushVariable, operand: &operand{str: "bee"}},
+		{addr: 2, op: opCall},
+		{addr: 3, op: opPop},
+		{addr: 4, op: opJmp, operand: &operand{number: 21, kind: "number"}},
+		{addr: 5, op: opPushNumber, operand: &operand{number: 0, kind: "number"}},
+		{addr: 6, op: opPushNumber, operand: &operand{number: 6, kind: "number"}},
+		{addr: 7, op: opRandom},
+		{addr: 8, op: opConvertToFloat},
+		{addr: 9, op: opInt},
+		{addr: 10, op: opCopy},
+		{addr: 11, op: opPushNumber, operand: &operand{number: 0, kind: "number"}},
+		{addr: 12, op: opEqual},
+		{addr: 13, op: opJeq, operand: &operand{number: 1, kind: "number"}},
+		{addr: 14, op: opCopy},
+		{addr: 15, op: opPushNumber, operand: &operand{number: 1, kind: "number"}},
+		{addr: 16, op: opEqual},
+		{addr: 17, op: opJeq, operand: &operand{number: 18, kind: "number"}},
+		{addr: 18, op: opPushVariable, operand: &operand{str: "fly"}},
+		{addr: 19, op: opCall},
+		{addr: 20, op: opPop},
+		{addr: 21, op: opRet},
+	}
+	lines := decompileRange(code, 0, len(code), 0)
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "goto label_") || !strings.Contains(got, "temp.switchvalue = int(random(0, 6));") || !strings.Contains(got, "if (temp.switchvalue == 0)") || !strings.Contains(got, "else if (temp.switchvalue == 1)") {
+		t.Fatalf("computed selector dispatch:\n%s", got)
+	}
+}
+
 func TestRecoverForwardDispatchCaseAfterTable(t *testing.T) {
 	code := []instruction{
 		{addr: 0, op: opJmp, operand: &operand{number: 3, kind: "number"}},

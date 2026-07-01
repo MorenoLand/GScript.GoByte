@@ -1085,7 +1085,7 @@ func recoverForwardDispatch(code []instruction, pc, target, end, indent int, sta
 	if target <= pc+1 || target >= end {
 		return nil, 0, false
 	}
-	cases, tail, ok := parseForwardDispatchCases(code, pc, target, end, state)
+	cases, tail, selector, ok := parseForwardDispatchCases(code, pc, target, end, state)
 	if !ok || len(cases) == 0 {
 		return nil, 0, false
 	}
@@ -1120,6 +1120,9 @@ func recoverForwardDispatch(code []instruction, pc, target, end, indent int, sta
 	}
 	commonEnd, hasCommonEnd := forwardDispatchCommonEnd(code, targets, target)
 	var lines []string
+	if selectorNeedsBinding(selector) {
+		lines = append(lines, pad(indent)+"temp.switchvalue = "+selector+";")
+	}
 	maxEnd := tail
 	for i, c := range cases {
 		bodyEnd := targetToNext[c.target]
@@ -1146,10 +1149,14 @@ func recoverForwardDispatch(code []instruction, pc, target, end, indent int, sta
 	return lines, maxEnd - 1, true
 }
 
-func parseForwardDispatchCases(code []instruction, pc, target, end int, state *decompileState) ([]dispatchCase, int, bool) {
+func parseForwardDispatchCases(code []instruction, pc, target, end int, state *decompileState) ([]dispatchCase, int, string, bool) {
 	selector, pos, ok := dispatchSelector(code, target, state)
 	if !ok {
-		return nil, 0, false
+		return nil, 0, "", false
+	}
+	conditionSelector := selector
+	if selectorNeedsBinding(selector) {
+		conditionSelector = "temp.switchvalue"
 	}
 	var cases []dispatchCase
 	for pos+4 < end {
@@ -1168,9 +1175,9 @@ func parseForwardDispatchCases(code []instruction, pc, target, end int, state *d
 		if caseTarget <= pc || caseTarget >= end {
 			break
 		}
-		condition := selector + " == " + lit
+		condition := conditionSelector + " == " + lit
 		if jump.op == opJne {
-			condition = selector + " != " + lit
+			condition = conditionSelector + " != " + lit
 		}
 		cases = append(cases, dispatchCase{condition: condition, target: caseTarget})
 		pos += 4
@@ -1185,7 +1192,11 @@ func parseForwardDispatchCases(code []instruction, pc, target, end int, state *d
 	if pos < end && code[pos].op == opPop {
 		pos++
 	}
-	return cases, pos, len(cases) > 0
+	return cases, pos, selector, len(cases) > 0
+}
+
+func selectorNeedsBinding(selector string) bool {
+	return strings.Contains(selector, "(")
 }
 
 func dispatchLiteral(ins instruction) (string, bool) {
@@ -1592,6 +1603,10 @@ func dispatchSelector(code []instruction, target int, state *decompileState) (st
 		case opConvertToFloat, opConvertToString, opConvertToObject, opConvertToVar, opEndParams:
 		case opCall:
 			stack = append(stack, expr{text: buildCall(&stack), kind: "call"})
+		case opInt:
+			stack = append(stack, functionCall(&stack, "int", 1))
+		case opRandom:
+			stack = append(stack, functionCall(&stack, "random", 2))
 		case opAccessMember:
 			rhs, lhs := popExpr(&stack), popExpr(&stack)
 			stack = append(stack, expr{text: memberBase(lhs.text) + "." + memberName(rhs.text)})
@@ -1970,7 +1985,7 @@ func recoverForwardGotoGuards(lines []string) []string {
 		}
 		if blockEnd, ok := forwardGuardBlockEnd(lines, i+1, indent); ok {
 			out = append(out, strings.Repeat(" ", indent)+"if (!("+cond+")) {")
-			for _, line := range recoverForwardGotoGuards(lines[i+1:blockEnd]) {
+			for _, line := range recoverForwardGotoGuards(lines[i+1 : blockEnd]) {
 				out = append(out, reindentBlockLine(line, indent, indent+2))
 			}
 			out = append(out, strings.Repeat(" ", indent)+"}")
