@@ -1041,3 +1041,26 @@ func TestAssignmentStyleGuiConstructorKeepsVariableNameArgument(t *testing.T) {
 		t.Fatalf("constructor variable arg:\n%s\nwant:\n%s", got, want)
 	}
 }
+
+func TestAnonymousGuiAssignmentConstructorClosesWithSemicolon(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "this"}},
+		{addr: 1, op: opPushVariable, operand: &operand{str: "gamepanel"}},
+		{addr: 2, op: opAccessMember},
+		{addr: 3, op: opPushVariable, operand: &operand{str: "unknown_object"}},
+		{addr: 4, op: opPushString, operand: &operand{str: "GuiStretchCtrl", kind: "string"}},
+		{addr: 5, op: opNewObject},
+		{addr: 6, op: opAssign},
+		{addr: 7, op: opConvertToObject},
+		{addr: 8, op: opWith, operand: &operand{number: 12, kind: "number"}},
+		{addr: 9, op: opPushVariable, operand: &operand{str: "clientwidth"}},
+		{addr: 10, op: opPushNumber, operand: &operand{number: 660, kind: "number"}},
+		{addr: 11, op: opAssign},
+	}, 0, 12, 0)
+
+	got := strings.Join(lines, "\n")
+	want := "this.gamepanel = new GuiStretchCtrl() {\n  clientwidth = 660;\n};"
+	if got != want {
+		t.Fatalf("anonymous assignment constructor:\n%s\nwant:\n%s", got, want)
+	}
+}

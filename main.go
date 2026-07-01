@@ -640,9 +640,14 @@ func decompileRangeWithStateAndStack(code []instruction, start, end, indent int,
 		case opWith:
 			target := jumpTarget(ins)
 			if target > pc && target <= end && len(lines) > 0 && isConstructorLine(lines[len(lines)-1]) {
+				assignmentConstructor := isAssignmentConstructorLine(lines[len(lines)-1])
 				lines[len(lines)-1] = strings.TrimSuffix(lines[len(lines)-1], ";") + " {"
 				lines = append(lines, decompileRangeWithState(code, pc+1, target, indent+1, state)...)
-				lines = append(lines, pad(indent)+"}")
+				close := "}"
+				if assignmentConstructor {
+					close = "};"
+				}
+				lines = append(lines, pad(indent)+close)
 				pc = target - 1
 			} else if target > pc && target <= end {
 				targetExpr := popExpr(&stack)
@@ -2610,6 +2615,11 @@ func unquoteText(s string) string {
 func isConstructorLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
 	return strings.HasPrefix(trimmed, "new ") && strings.HasSuffix(trimmed, ");") || strings.Contains(trimmed, " = new ") && strings.HasSuffix(trimmed, ");")
+}
+
+func isAssignmentConstructorLine(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	return strings.Contains(trimmed, " = new ") && strings.HasSuffix(trimmed, ");")
 }
 
 func recoverFormatAssignment(lhs, rhs expr) (expr, expr, bool) {
