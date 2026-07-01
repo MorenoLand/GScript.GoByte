@@ -207,6 +207,43 @@ func TestRecoverProfileCloneBlocks(t *testing.T) {
 	}
 }
 
+func TestRecoverProfileCloneWithBlock(t *testing.T) {
+	lines := recoverProfileCloneBlocks([]string{
+		`  "Game_BomberMad_TutorialInGameTextProfile" = "Game_BomberMad_TutorialTextProfile";`,
+		`  with ("Game_BomberMad_TutorialInGameTextProfile") {`,
+		`    fontcolor = "white";`,
+		`    if (!player.languagedomain in {"fr", "de"}) {`,
+		`      fonttype = "adventure";`,
+		`    }`,
+		`  }`,
+		`  addcontrol("Game_BomberMad_TutorialInGameTextProfile");`,
+	})
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, `with ("Game_BomberMad_TutorialInGameTextProfile")`) || !strings.Contains(got, `new GuiControlProfile("Game_BomberMad_TutorialInGameTextProfile")`) || !strings.Contains(got, `fonttype = "adventure";`) {
+		t.Fatalf("profile with block not recovered:\n%s", got)
+	}
+}
+
+func TestRecoverForwardGotoGuardWrapsIfChain(t *testing.T) {
+	lines := recoverForwardGotoGuards([]string{
+		`      if (graalversion >= 5.222) goto label_9737;`,
+		`      if (client.bombermovespeed >= 1) {`,
+		`        this.display.movestep = 0.5;`,
+		`      }`,
+		`      else if (client.bombermovespeed <= -1) {`,
+		`        this.display.movestep = 0.25;`,
+		`      }`,
+		`      else {`,
+		`        this.display.movestep = 0.333333333;`,
+		`      }`,
+		`    }`,
+	})
+	got := strings.Join(lines, "\n")
+	if strings.Contains(got, "goto label_") || !strings.Contains(got, "if (!(graalversion >= 5.222)) {") || !strings.Contains(got, "else if (client.bombermovespeed <= -1)") {
+		t.Fatalf("forward guard if-chain not recovered:\n%s", got)
+	}
+}
+
 func TestRecoverBareConstructorBlocks(t *testing.T) {
 	lines := recoverBareConstructorBlocks([]string{
 		`    new GuiControl(controlname);`,
@@ -297,6 +334,21 @@ func TestRecoverWhileLoopWithSleep(t *testing.T) {
 	want := "while (true) {\n  if (!done) {\n    break;\n  }\n  sleep(0.05);\n}"
 	if got != want {
 		t.Fatalf("while sleep loop:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestRecoverWhileLoopWithConditionSetupBackEdge(t *testing.T) {
+	body := []string{
+		"  temp.check = getSurroundBlocks();",
+		"  for (temp.i in temp.blocksurround) {",
+		"  }",
+		"  temp.checked.add(temp.checksurround);",
+		"  goto label_2917;",
+	}
+	lines, ok := recoverWhileLoop(body, "temp.checked.size() != temp.blocksurround.size()", 2928, 0)
+	got := strings.Join(lines, "\n")
+	if !ok || strings.Contains(got, "goto label_2917") || !strings.Contains(got, "while (temp.checked.size() != temp.blocksurround.size())") {
+		t.Fatalf("condition-setup while not recovered (%v):\n%s", ok, got)
 	}
 }
 
@@ -522,7 +574,7 @@ func TestRecoverBackwardDispatchWithNumericCases(t *testing.T) {
 		{addr: 5, op: opPushVariable, operand: &operand{str: "result"}},
 		{addr: 6, op: opPushString, operand: &operand{str: "nine", kind: "string"}},
 		{addr: 7, op: opAssign},
-		{addr: 8, op: opJmp, operand: &operand{number: 18, kind: "number"}},
+		{addr: 8, op: opJmp, operand: &operand{number: 16, kind: "number"}},
 		{addr: 9, op: opPushVariable, operand: &operand{str: "level"}},
 		{addr: 10, op: opCopy},
 		{addr: 11, op: opPushNumber, operand: &operand{number: 6, kind: "number"}},
@@ -538,6 +590,32 @@ func TestRecoverBackwardDispatchWithNumericCases(t *testing.T) {
 	got := strings.Join(lines, "\n")
 	if strings.Contains(got, "goto label_") || !strings.Contains(got, "if (level == 6)") || !strings.Contains(got, "else if (level == 9)") {
 		t.Fatalf("numeric backward dispatch not recovered:\n%s", got)
+	}
+}
+
+func TestRecoverConditionalAssignmentChain(t *testing.T) {
+	code := []instruction{
+		{addr: 0, op: opTemp},
+		{addr: 1, op: opPushVariable, operand: &operand{str: "nextrow"}},
+		{addr: 2, op: opAccessMember},
+		{addr: 3, op: opPushVariable, operand: &operand{str: "score"}},
+		{addr: 4, op: opPushNumber, operand: &operand{number: 10000, kind: "number"}},
+		{addr: 5, op: opGE},
+		{addr: 6, op: opJne, operand: &operand{number: 9, kind: "number"}},
+		{addr: 7, op: opPushNumber, operand: &operand{number: 2, kind: "number"}},
+		{addr: 8, op: opJmp, operand: &operand{number: 16, kind: "number"}},
+		{addr: 9, op: opPushVariable, operand: &operand{str: "score"}},
+		{addr: 10, op: opPushNumber, operand: &operand{number: 8000, kind: "number"}},
+		{addr: 11, op: opGE},
+		{addr: 12, op: opJne, operand: &operand{number: 15, kind: "number"}},
+		{addr: 13, op: opPushNumber, operand: &operand{number: 3, kind: "number"}},
+		{addr: 14, op: opJmp, operand: &operand{number: 16, kind: "number"}},
+		{addr: 15, op: opPushNumber, operand: &operand{number: 7, kind: "number"}},
+		{addr: 16, op: opAssign},
+	}
+	got := strings.Join(decompileRange(code, 0, len(code), 0), "\n")
+	if strings.Contains(got, "goto label_") || strings.Contains(got, "if (score >= 10000) {\n}") || !strings.Contains(got, "temp.nextrow = 2;") || !strings.Contains(got, "else if (score >= 8000)") || !strings.Contains(got, "temp.nextrow = 7;") {
+		t.Fatalf("conditional assignment chain not recovered:\n%s", got)
 	}
 }
 

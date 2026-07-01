@@ -836,6 +836,12 @@ func decompileRangeWithStateAndStack(code []instruction, start, end, indent int,
 		case opJne, opJeq:
 			target := jumpTarget(ins)
 			condition := popExpr(&stack).text
+			if assignLines, newPC, ok := recoverConditionalAssignmentChain(code, pc, target, end, indent, state, condition, ins.op, stack); ok {
+				lines = append(lines, assignLines...)
+				stack = stack[:len(stack)-1]
+				pc = newPC
+				continue
+			}
 			if target > pc && target <= end {
 				if ins.op == opJeq {
 					condition = "!(" + condition + ")"
@@ -954,7 +960,7 @@ func recoverForLoop(lines []string, body []string, condition string, pc int, ind
 	}
 	labelText := strings.TrimSuffix(strings.TrimPrefix(gotoLine, "goto label_"), ";")
 	label, err := strconv.Atoi(labelText)
-	if err != nil || label > pc {
+	if err != nil || label > pc || label < pc-16 {
 		return nil, false
 	}
 
@@ -1034,7 +1040,7 @@ func recoverWhileLoop(body []string, condition string, pc int, indent int) ([]st
 	}
 	labelText := strings.TrimSuffix(strings.TrimPrefix(gotoLine, "goto label_"), ";")
 	label, err := strconv.Atoi(labelText)
-	if err != nil || label < pc-1 || label > pc {
+	if err != nil || label > pc || label < pc-16 {
 		return nil, false
 	}
 	workBody := fillEmptyLoopExitIfs(body[:len(body)-1])
@@ -1277,6 +1283,134 @@ func recoverBackwardDispatch(code []instruction, pc, target, end, indent int, st
 		lines = append(lines, pad(indent)+"}")
 	}
 	return lines, skipDispatchTail(code, tail, commonEnd, end), true
+}
+
+type conditionalAssignmentCase struct {
+	condition string
+	value     string
+}
+
+func recoverConditionalAssignmentChain(code []instruction, pc, target, end, indent int, state *decompileState, firstCondition string, firstOp opcode, stack []expr) ([]string, int, bool) {
+	if firstOp != opJne || len(stack) == 0 || target != pc+3 || pc+2 >= end || code[pc+2].op != opJmp {
+		return nil, 0, false
+	}
+	lhs := stack[len(stack)-1].text
+	common := jumpTarget(code[pc+2])
+	if common <= target || common >= end || code[common].op != opAssign {
+		return nil, 0, false
+	}
+	value, ok := evalExprRange(code, pc+1, pc+2, state)
+	if !ok {
+		return nil, 0, false
+	}
+	cases := []conditionalAssignmentCase{{condition: firstCondition, value: value}}
+	pos := target
+	defaultValue := ""
+	for pos < common {
+		branch := -1
+		for i := pos; i+2 < common && i < pos+12; i++ {
+			if code[i].op == opJne && jumpTarget(code[i]) == i+3 && code[i+2].op == opJmp && jumpTarget(code[i+2]) == common {
+				branch = i
+				break
+			}
+		}
+		if branch < 0 {
+			defaultValue, ok = evalExprRange(code, pos, common, state)
+			if !ok {
+				return nil, 0, false
+			}
+			break
+		}
+		condition, ok := evalExprRange(code, pos, branch, state)
+		if !ok {
+			return nil, 0, false
+		}
+		value, ok := evalExprRange(code, branch+1, branch+2, state)
+		if !ok {
+			return nil, 0, false
+		}
+		cases = append(cases, conditionalAssignmentCase{condition: condition, value: value})
+		pos = jumpTarget(code[branch])
+	}
+	if defaultValue == "" || len(cases) == 0 {
+		return nil, 0, false
+	}
+	lines := make([]string, 0, len(cases)*3+3)
+	for i, c := range cases {
+		if i == 0 {
+			lines = append(lines, pad(indent)+"if ("+c.condition+") {")
+		} else {
+			lines = append(lines, pad(indent)+"else if ("+c.condition+") {")
+		}
+		lines = append(lines, pad(indent+1)+lhs+" = "+c.value+";")
+		lines = append(lines, pad(indent)+"}")
+	}
+	lines = append(lines, pad(indent)+"else {")
+	lines = append(lines, pad(indent+1)+lhs+" = "+defaultValue+";")
+	lines = append(lines, pad(indent)+"}")
+	return lines, common, true
+}
+
+func evalExprRange(code []instruction, start, end int, state *decompileState) (string, bool) {
+	var stack []expr
+	for pc := start; pc < end; pc++ {
+		ins := code[pc]
+		switch ins.op {
+		case opPushString:
+			stack = append(stack, expr{text: quote(ins.operand.str), kind: "string"})
+		case opPushVariable:
+			stack = append(stack, expr{text: variableName(ins.operand.str)})
+		case opPushNumber:
+			stack = append(stack, expr{text: numberText(ins.operand)})
+		case opPushTrue:
+			stack = append(stack, expr{text: "true"})
+		case opPushFalse:
+			stack = append(stack, expr{text: "false"})
+		case opPushNull:
+			stack = append(stack, expr{text: "null"})
+		case opPi:
+			stack = append(stack, expr{text: "pi"})
+		case opThis:
+			stack = append(stack, expr{text: "this"})
+		case opThisO:
+			stack = append(stack, expr{text: "thiso"})
+		case opTemp:
+			stack = append(stack, expr{text: "temp"})
+		case opPlayer:
+			stack = append(stack, expr{text: "player"})
+		case opPlayerO:
+			stack = append(stack, expr{text: "playero"})
+		case opLevel:
+			stack = append(stack, expr{text: "level"})
+		case opParams:
+			stack = append(stack, expr{text: "params"})
+		case opGetRegister:
+			id := operandNumber(ins)
+			if state != nil {
+				if item, ok := state.registers[id]; ok {
+					stack = append(stack, item)
+					break
+				}
+			}
+			stack = append(stack, expr{text: fmt.Sprintf("reg%d", id)})
+		case opConvertToFloat, opConvertToString, opConvertToObject, opConvertToVar, opEndParams:
+		case opAccessMember:
+			rhs, lhs := popExpr(&stack), popExpr(&stack)
+			stack = append(stack, expr{text: memberBase(lhs.text) + "." + memberName(rhs.text)})
+		case opArrayAccess:
+			index, arr := popExpr(&stack), popExpr(&stack)
+			stack = append(stack, expr{text: arr.text + "[" + index.text + "]"})
+		case opAdd, opSubtract, opMultiply, opDivide, opModulo, opPower, opBoolAnd, opBoolOr, opEqual, opNotEqual, opLessThan, opGreaterThan, opLE, opGE, opBitwiseOr, opBitwiseAnd, opBitwiseXor, opShiftLeft, opShiftRight, opIn, opJoin, opAppend:
+			rhs, lhs := popExpr(&stack), popExpr(&stack)
+			stack = append(stack, expr{text: lhs.text + " " + infix(ins.op) + " " + rhs.text})
+		default:
+			return "", false
+		}
+	}
+	if len(stack) != 1 {
+		return "", false
+	}
+	return stack[0].text, true
 }
 
 func recoverTailDispatch(code []instruction, pc, end, indent int, state *decompileState) ([]string, int, bool) {
@@ -1616,6 +1750,21 @@ func recoverProfileCloneBlocks(lines []string) []string {
 			out = append(out, lines[i])
 			continue
 		}
+		if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "with ("+quote(name)+") {" {
+			blockEnd := matchingBlockEnd(lines, i+1)
+			if blockEnd > i+1 && blockEnd+1 < len(lines) && strings.TrimSpace(lines[blockEnd+1]) == "addcontrol("+quote(name)+");" {
+				out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+") {")
+				sourceFieldIndent := parseLineIndent(lines[i+1]) + 2
+				targetFieldIndent := indent + 2
+				for _, field := range lines[i+2 : blockEnd] {
+					out = append(out, reindentBlockLine(field, sourceFieldIndent, targetFieldIndent))
+				}
+				out = append(out, strings.Repeat(" ", indent)+"}")
+				out = append(out, lines[blockEnd+1])
+				i = blockEnd + 1
+				continue
+			}
+		}
 		addIdx := -1
 		for j := i + 1; j < len(lines); j++ {
 			trimmed := strings.TrimSpace(lines[j])
@@ -1640,6 +1789,31 @@ func recoverProfileCloneBlocks(lines []string) []string {
 		i = addIdx
 	}
 	return out
+}
+
+func matchingBlockEnd(lines []string, openIdx int) int {
+	depth := 0
+	for i := openIdx; i < len(lines); i++ {
+		trimmed := strings.TrimSpace(lines[i])
+		if strings.HasSuffix(trimmed, "{") {
+			depth++
+		}
+		if strings.HasPrefix(trimmed, "}") {
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+func reindentBlockLine(line string, sourceFieldIndent, targetFieldIndent int) string {
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return ""
+	}
+	return strings.Repeat(" ", targetFieldIndent+max(0, parseLineIndent(line)-sourceFieldIndent)) + trimmed
 }
 
 func parseProfileCloneAssignment(line string) (string, string, int, bool) {
@@ -1776,7 +1950,20 @@ func recoverForwardGotoGuards(lines []string) []string {
 	out := make([]string, 0, len(lines))
 	for i := 0; i < len(lines); i++ {
 		cond, _, indent, ok := parseGotoIfLine(lines[i])
-		if !ok || i+1 >= len(lines) || !isSimpleStatementLine(lines[i+1], indent) {
+		if !ok || i+1 >= len(lines) {
+			out = append(out, lines[i])
+			continue
+		}
+		if blockEnd, ok := forwardGuardBlockEnd(lines, i+1, indent); ok {
+			out = append(out, strings.Repeat(" ", indent)+"if (!("+cond+")) {")
+			for _, line := range lines[i+1 : blockEnd] {
+				out = append(out, reindentBlockLine(line, indent, indent+2))
+			}
+			out = append(out, strings.Repeat(" ", indent)+"}")
+			i = blockEnd - 1
+			continue
+		}
+		if !isSimpleStatementLine(lines[i+1], indent) {
 			out = append(out, lines[i])
 			continue
 		}
@@ -1786,6 +1973,20 @@ func recoverForwardGotoGuards(lines []string) []string {
 		i++
 	}
 	return out
+}
+
+func forwardGuardBlockEnd(lines []string, start, indent int) (int, bool) {
+	if start >= len(lines) || parseLineIndent(lines[start]) != indent || !strings.HasSuffix(strings.TrimSpace(lines[start]), "{") {
+		return 0, false
+	}
+	end := start
+	for end < len(lines) {
+		if end > start && parseLineIndent(lines[end]) < indent {
+			break
+		}
+		end++
+	}
+	return end, end > start
 }
 
 func parseGotoIfLine(line string) (string, int, int, bool) {
