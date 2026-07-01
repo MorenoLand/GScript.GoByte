@@ -1224,3 +1224,44 @@ func TestConstructorAssignmentDoesNotAbsorbDifferentWithTarget(t *testing.T) {
 		t.Fatalf("constructor absorbed unrelated with:\n%s", got)
 	}
 }
+
+func TestNewObjectWithAssignmentReceiverKeepsReceiver(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "this"}},
+		{addr: 1, op: opPushString, operand: &operand{str: "singletable"}},
+		{addr: 2, op: opAccessMember},
+		{addr: 3, op: opPushString, operand: &operand{str: "SinglePlayerTable"}},
+		{addr: 4, op: opNew},
+		{addr: 5, op: opPushString, operand: &operand{str: "TStaticVar"}},
+		{addr: 6, op: opNewObject},
+		{addr: 7, op: opAssign},
+	}, 0, 8, 0)
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, `this.singletable = new TStaticVar("SinglePlayerTable");`) || strings.Contains(got, `SinglePlayerTable = new TStaticVar`) {
+		t.Fatalf("new object receiver:\n%s", got)
+	}
+}
+
+func TestNonGuiAssignmentConstructorKeepsExplicitWith(t *testing.T) {
+	lines := decompileRange([]instruction{
+		{addr: 0, op: opPushVariable, operand: &operand{str: "this"}},
+		{addr: 1, op: opPushString, operand: &operand{str: "singletable"}},
+		{addr: 2, op: opAccessMember},
+		{addr: 3, op: opPushString, operand: &operand{str: "SinglePlayerTable"}},
+		{addr: 4, op: opNew},
+		{addr: 5, op: opPushString, operand: &operand{str: "TStaticVar"}},
+		{addr: 6, op: opNewObject},
+		{addr: 7, op: opAssign},
+		{addr: 8, op: opPushVariable, operand: &operand{str: "this"}},
+		{addr: 9, op: opPushString, operand: &operand{str: "singletable"}},
+		{addr: 10, op: opAccessMember},
+		{addr: 11, op: opWith, operand: &operand{number: 15, kind: "number"}},
+		{addr: 12, op: opPushVariable, operand: &operand{str: "this"}},
+		{addr: 13, op: opPushString, operand: &operand{str: "_parent"}},
+		{addr: 14, op: opAssignMember},
+	}, 0, 15, 0)
+	got := strings.Join(lines, "\n")
+	if !strings.Contains(got, `this.singletable = new TStaticVar("SinglePlayerTable");`) || !strings.Contains(got, `with (this.singletable)`) || strings.Contains(got, `new TStaticVar("SinglePlayerTable") {`) {
+		t.Fatalf("non-gui assignment constructor with:\n%s", got)
+	}
+}

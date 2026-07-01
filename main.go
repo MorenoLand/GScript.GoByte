@@ -633,6 +633,8 @@ func decompileRangeWithStateAndStack(code []instruction, start, end, indent int,
 				} else {
 					stack = append(stack, obj)
 				}
+			} else if len(stack) > 0 {
+				stack = append(stack, expr{text: "new " + unquoteText(className.text) + "(" + constructorArg(target) + ")", kind: "object"})
 			} else {
 				className.kind = "class"
 				stack = append(stack, target, className)
@@ -2766,7 +2768,10 @@ func unquoteText(s string) string {
 
 func isConstructorLine(line string) bool {
 	trimmed := strings.TrimSpace(line)
-	return strings.HasPrefix(trimmed, "new ") && strings.HasSuffix(trimmed, ");") || strings.Contains(trimmed, " = new ") && strings.HasSuffix(trimmed, ");")
+	if strings.HasPrefix(trimmed, "new ") && strings.HasSuffix(trimmed, ");") {
+		return true
+	}
+	return strings.Contains(trimmed, " = new Gui") && strings.HasSuffix(trimmed, ");")
 }
 
 func isAssignmentConstructorLine(line string) bool {
