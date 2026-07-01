@@ -2098,23 +2098,26 @@ func recoverProfileCloneBlocks(lines []string) []string {
 	for i := 0; i < len(lines); i++ {
 		name, _, indent, ok := parseProfileCloneAssignment(lines[i])
 		if !ok {
+			if name, indent, ok := parseGuiControlProfileBlockOpen(lines[i]); ok {
+				blockEnd := matchingBlockEnd(lines, i)
+				if blockEnd > i && blockEnd+1 < len(lines) && strings.TrimSpace(lines[blockEnd+1]) == "addcontrol("+quote(name)+");" {
+					out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+");")
+					out = append(out, strings.Repeat(" ", indent)+"with ("+quote(name)+") {")
+					for _, field := range lines[i+1 : blockEnd] {
+						out = append(out, field)
+					}
+					out = append(out, strings.Repeat(" ", indent)+"}")
+					out = append(out, lines[blockEnd+1])
+					i = blockEnd + 1
+					continue
+				}
+			}
 			out = append(out, lines[i])
 			continue
 		}
 		if i+1 < len(lines) && strings.TrimSpace(lines[i+1]) == "with ("+quote(name)+") {" {
-			blockEnd := matchingBlockEnd(lines, i+1)
-			if blockEnd > i+1 && blockEnd+1 < len(lines) && strings.TrimSpace(lines[blockEnd+1]) == "addcontrol("+quote(name)+");" {
-				out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+") {")
-				sourceFieldIndent := parseLineIndent(lines[i+1]) + 2
-				targetFieldIndent := indent + 2
-				for _, field := range lines[i+2 : blockEnd] {
-					out = append(out, reindentBlockLine(field, sourceFieldIndent, targetFieldIndent))
-				}
-				out = append(out, strings.Repeat(" ", indent)+"}")
-				out = append(out, lines[blockEnd+1])
-				i = blockEnd + 1
-				continue
-			}
+			out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+");")
+			continue
 		}
 		addIdx := -1
 		for j := i + 1; j < len(lines); j++ {
@@ -2131,7 +2134,8 @@ func recoverProfileCloneBlocks(lines []string) []string {
 			out = append(out, lines[i])
 			continue
 		}
-		out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+") {")
+		out = append(out, strings.Repeat(" ", indent)+"new GuiControlProfile("+quote(name)+");")
+		out = append(out, strings.Repeat(" ", indent)+"with ("+quote(name)+") {")
 		for _, field := range lines[i+1 : addIdx] {
 			out = append(out, strings.Repeat(" ", indent)+pad(1)+strings.TrimSpace(field))
 		}
@@ -2140,6 +2144,21 @@ func recoverProfileCloneBlocks(lines []string) []string {
 		i = addIdx
 	}
 	return out
+}
+
+func parseGuiControlProfileBlockOpen(line string) (string, int, bool) {
+	indent := parseLineIndent(line)
+	trimmed := strings.TrimSpace(line)
+	prefix := "new GuiControlProfile("
+	if !strings.HasPrefix(trimmed, prefix) || !strings.HasSuffix(trimmed, ") {") {
+		return "", 0, false
+	}
+	raw := strings.TrimSuffix(strings.TrimPrefix(trimmed, prefix), ") {")
+	name := unquoteText(raw)
+	if name == raw {
+		return "", 0, false
+	}
+	return name, indent, true
 }
 
 func matchingBlockEnd(lines []string, openIdx int) int {
